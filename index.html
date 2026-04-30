@@ -50,15 +50,19 @@
             justify-content: center;
             flex-direction: column;
             gap: 1rem;
+            padding: 2rem;
+            text-align: center;
         }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
 
-    <!-- Global Loader -->
+    <!-- Global Loader / Error Screen -->
     <div id="global-loader">
-        <div class="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-        <p class="text-slate-500 font-medium">A carregar galeria...</p>
+        <div id="loader-spinner" class="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+        <div id="loader-content">
+            <p class="text-slate-500 font-medium">A carregar galeria da AD Barravento...</p>
+        </div>
     </div>
 
     <!-- Header -->
@@ -207,42 +211,87 @@
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
         import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+        
+        const firebaseConfig = {
+  apiKey: "SUA_API_KEY",
+  authDomain: "SEU_PROJETO.firebaseapp.com",
+  projectId: "SEU_PROJETO",
+  storageBucket: "SEU_PROJETO.appspot.com",
+  messagingSenderId: "...",
+  appId: "..."
+};
+6.  **Defina o ID:** Substitua `appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';` por `appId = 'meu-teste-local';`.
 
-        // --- Firebase Config ---
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        // --- Firebase Handling for Local Testing ---
+        let db, auth, appId;
+        let isFirebaseReady = false;
+
+        const showError = (msg) => {
+            const loader = document.getElementById('global-loader');
+            const spinner = document.getElementById('loader-spinner');
+            const content = document.getElementById('loader-content');
+            spinner.style.display = 'none';
+            content.innerHTML = `
+                <div class="bg-red-50 p-6 rounded-2xl border border-red-200 max-w-md mx-auto">
+                    <i class="fas fa-exclamation-circle text-red-500 text-3xl mb-4"></i>
+                    <h3 class="text-red-800 font-bold text-lg mb-2">Erro de Configuração</h3>
+                    <p class="text-red-700 text-sm mb-4">${msg}</p>
+                    <div class="text-left bg-white p-3 rounded-lg text-xs font-mono text-slate-600 border border-red-100">
+                        Certifique-se de que está a correr este ficheiro no ambiente correto ou que inseriu as credenciais no código.
+                    </div>
+                </div>
+            `;
+        };
+
+        try {
+            // Verificar se as variáveis de ambiente do Canvas existem
+            if (typeof __firebase_config === 'undefined' || !__firebase_config) {
+                throw new Error("As credenciais do Firebase não foram encontradas. Para testar localmente, precisa de inserir o seu 'firebaseConfig' manualmente no script.");
+            }
+
+            const firebaseConfig = JSON.parse(__firebase_config);
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            isFirebaseReady = true;
+
+            // Iniciar Autenticação
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (err) {
+                    console.error("Erro na autenticação:", err);
+                    showError("Erro ao ligar ao serviço de autenticação. Verifique a sua ligação.");
+                }
+            };
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    document.getElementById('global-loader').style.display = 'none';
+                    setupRealtimeListener();
+                }
+            });
+
+            initAuth();
+
+        } catch (error) {
+            console.error("Firebase Init Error:", error);
+            showError(error.message);
+        }
 
         // --- State Management ---
         let photos = [];
         const AUTH_PASSWORD = "midia2026";
-        let currentUser = null;
-
-        // --- Initialization & Auth ---
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Erro na autenticação:", err);
-            }
-        };
-
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            if (user) {
-                document.getElementById('global-loader').style.display = 'none';
-                setupRealtimeListener();
-            }
-        });
 
         // --- Firestore Realtime Sync ---
         const setupRealtimeListener = () => {
+            if (!isFirebaseReady) return;
             const photosCol = collection(db, 'artifacts', appId, 'public', 'data', 'photos');
             
             onSnapshot(photosCol, (snapshot) => {
@@ -253,13 +302,17 @@
                 render();
             }, (error) => {
                 console.error("Erro no listener Firestore:", error);
+                // Se for erro de permissão, pode ser o caminho da coleção
+                if (error.code === 'permission-denied') {
+                    showError("Acesso negado à base de dados. Verifique as regras de segurança.");
+                }
             });
         };
 
         // --- Core Functions ---
 
         async function handleFiles(files) {
-            if (!currentUser || files.length === 0) return;
+            if (!isFirebaseReady || files.length === 0) return;
             
             const progressContainer = document.getElementById('upload-progress-container');
             const progressBar = document.getElementById('upload-bar');
@@ -273,18 +326,20 @@
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 
-                if (file.size > 1024 * 1024) {
-                    continue; // Pular ficheiros maiores que 1MB
-                }
+                if (file.size > 1024 * 1024) continue; 
 
                 const base64 = await toBase64(file);
                 
-                await addDoc(photosCol, {
-                    name: file.name,
-                    url: base64,
-                    date: dateStr,
-                    timestamp: Date.now()
-                });
+                try {
+                    await addDoc(photosCol, {
+                        name: file.name,
+                        url: base64,
+                        date: dateStr,
+                        timestamp: Date.now()
+                    });
+                } catch (e) {
+                    console.error("Upload failed", e);
+                }
 
                 const perc = Math.round(((i + 1) / files.length) * 100);
                 progressBar.style.width = `${perc}%`;
@@ -374,7 +429,7 @@
                 container.innerHTML = `
                     <div class="flex flex-col items-center justify-center py-20 text-slate-400">
                         <i class="far fa-images text-6xl mb-4 opacity-20"></i>
-                        <p class="text-lg">Nenhuma foto na nuvem da AD Barravento.</p>
+                        <p class="text-lg text-center px-4">Nenhuma foto na nuvem da AD Barravento.</p>
                     </div>`;
                 return;
             }
@@ -557,9 +612,6 @@
         document.getElementById('admin-password').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') window.checkPassword();
         });
-
-        // Initialize App
-        initAuth();
 
     </script>
 </body>
